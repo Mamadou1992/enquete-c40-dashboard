@@ -1,0 +1,4 @@
+# Ne jamais publier le jeton API
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
