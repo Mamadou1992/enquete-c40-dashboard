@@ -23,9 +23,11 @@ px.defaults.color_continuous_scale = "Greens"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 XLSFORM = os.path.join(APP_DIR, "enquete_C40.xlsx")
 GEOJSON = os.path.join(APP_DIR, "communes_dakar.geojson")
+LOGO = os.path.join(APP_DIR, "logo_sgp.jpeg")
 DEFAULT_URL = "https://kf.kobotoolbox.org"
 
-st.set_page_config(page_title="Enquête C40 GREEN+ Dakar", page_icon="♻️", layout="wide")
+st.set_page_config(page_title="Enquête C40 GREEN+ Dakar",
+                   page_icon=LOGO if os.path.exists(LOGO) else "♻️", layout="wide")
 
 # Habillage vert des composants (puces, encadrés, onglets, indicateurs)
 st.markdown("""
@@ -90,7 +92,12 @@ def verifier_acces():
 
     _, centre, _ = st.columns([1, 2, 1])
     with centre:
-        st.markdown("### ♻️ Enquête C40 GREEN+")
+        if os.path.exists(LOGO):
+            g, d = st.columns([1, 3])
+            g.image(LOGO, width=110)
+            d.markdown("### Enquête C40 GREEN+")
+        else:
+            st.markdown("### ♻️ Enquête C40 GREEN+")
         st.caption("Plateforme de suivi - Acteurs du secteur des déchets, Dakar")
         saisie = st.text_input("Mot de passe", type="password",
                                placeholder="Saisissez le mot de passe d'accès")
@@ -130,7 +137,9 @@ geojson = get_geojson()
 
 # --------------------------------------------------------------- Sidebar ----
 
-st.sidebar.title("♻️ Enquête C40 GREEN+")
+if os.path.exists(LOGO):
+    st.sidebar.image(LOGO, width="stretch")
+st.sidebar.title("Enquête C40 GREEN+")
 st.sidebar.caption("Acteurs du secteur des déchets - Département de Dakar")
 
 base_url = st.secrets.get("kobo", {}).get("base_url", DEFAULT_URL)
