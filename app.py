@@ -285,6 +285,43 @@ def explode_multiple(df: pd.DataFrame, col: str, form: dict) -> pd.Series:
     return pd.Series(vals).value_counts()
 
 
+# ------------------------------------------- Parties prenantes (C40 SGP) ------
+# Source : Cartographie des parties prenantes - Mission C40 Cities / Ville de Dakar
+# (catégorie, partie prenante, rôle, niveau d'influence, apport au processus)
+PARTIES_PRENANTES = [
+    ("Structures déconcentrés", "Ministère de l'Urbanisme, des Collectivités Territoriales et de l'Aménagement des Territoires", "Planification urbaine et gouvernance locale ;", "Haut", "Coordination territoriale et ancrage institutionnel du projet"),
+    ("Structures déconcentrés", "Ministère de l'Environnement et de la Transition Écologique", "Élaboration des politiques environnementales, réglementation ministère de tutelle technique de la SONAGED", "Moyen", "Cadre juridique et réglementaire de la valorisation"),
+    ("Structures déconcentrés", "Ministère du Travail, du Dialogue social et des Relations avec les Institutions", "Cadre légal du travail, dialogue social", "Haut", "Appui à la formalisation et aux droits des travailleurs"),
+    ("Structures déconcentrés", "Société Nationale de Gestion Intégrée des Déchets (SONAGED)", "Organise la collecte, transport, traitement et élimination des déchets au niveau national", "Haut", "Acteur clé de l'articulation formel/informel ; accès aux données et aux circuits"),
+    ("Structures déconcentrés", "3FPT", "Formation et insertion professionnelle", "Moyen", "Levier de financement et de co-construction du programme de formation"),
+    ("Structures déconcentrés", "Sénégal Numérique SA (SENUM SA)", "Solutions numériques pour la gouvernance et formation des acteurs dans la valorisation des DEEE", "Bas", "Optimisation numérique de la gestion des déchets"),
+    ("Acteurs locaux", "19 communes du département de Dakar", "Mise en œuvre des politiques locales", "Haut", "Facilitent l'accès au terrain et relaient les réalités locales"),
+    ("Projets", "PROMOGED", "Réhabilitation de Mbeubeuss, soutien aux récupérateurs informels", "Haut", "Appui infrastructures et cadre concret d'intégration"),
+    ("Acteur informel", "Association Bokk Diom de Mbeubeuss", "Tri et valorisation des déchets à Mbeubeuss (2 000+ membres)", "Haut", "Expertise informelle et présence terrain ; porte la voix des récupérateurs"),
+    ("Acteur informel", "Charretiers de Dakar", "Pré-collecte des déchets dans les quartiers", "Haut", "Service de proximité indispensable ; cible de l'identification et de la formalisation"),
+    ("Secteur privé local", "Sunu Plastic Odyssey", "Recyclage plastique, innovation sociale", "Moyen", "Débouché industriel et unité de formation ; relie les pré-collecteurs au marché"),
+    ("Secteur privé local", "PROPLAST / RECUPLAST / CIPROVIS", "Collecte et valorisation des déchets plastiques", "Moyen", "Créent des emplois et des débouchés pour la matière triée"),
+    ("Secteur privé local", "SOMETA", "Recyclage métallique", "Bas", "Débouché pour les déchets ferreux récupérés"),
+    ("Secteur privé local", "SetTIC", "Solutions numériques pour collecte et valorisation", "Bas", "Gestion intelligente des flux de déchets"),
+    ("Société civile", "Zéro Déchet Sénégal", "Plaidoyer et sensibilisation pour la réduction, le tri et la valorisation", "Moyen", "Éducation environnementale et mobilisation citoyenne"),
+    ("Société civile", "JVE Sénégal", "Environnement, jeunesse et volontariat", "Moyen", "Mobilisation des jeunes et relais terrain"),
+    ("Société civile", "Taaral", "Actions communautaires environnementales", "Moyen", "Ancrage communautaire local"),
+    ("ONG internationale", "WIEGO", "Recherche et plaidoyer pour les travailleurs informels", "Haut", "Expertise internationale sur la structuration des récupérateurs"),
+    ("ONG internationale", "Practical Action", "Amélioration de la santé publique et de la sécurité à Mbeubeuss", "Moyen", "Appui à la formation, aux EPI et à la sauvegarde"),
+    ("ONG internationale", "Fondation Heinrich Böll", "Appui à la transition écologique", "Moyen", "Fort potentiel de plaidoyer et de sensibilisation"),
+    ("Partenaire international", "UN-Habitat", "Appui à la gouvernance urbaine", "Moyen", "Expertise et financement pour la planification urbaine"),
+    ("Partenaire international", "Banque Mondiale", "Financement de projets structurants", "Haut", "Financement et expertise via une stratégie adaptée aux bailleurs"),
+    ("Partenaire international", "AFD", "Appui financier et technique", "Haut", "Soutien à l'intégration du secteur informel"),
+]
+PROTOCOLES = [
+    ("C40 / Ville de Dakar", "Reporting mensuel, coordination, validation des livrables", "Mansour GAYE"),
+    ("SONAGED", "Échanges encadrés (cloison éthique), accès aux données", "Malado DIALLO et Alassane DIOUF"),
+    ("PROMOGED / privés valorisateurs", "Entretiens, débouchés, infrastructures", "Malado DIALLO et Alassane DIOUF"),
+    ("Communes / mairies", "Autorisations, points réguliers", "Ibrahima NDOYE"),
+    ("Institutions (entretiens)", "Entretiens semi-directifs planifiés", "Nafi DANDIO et Bintou DIOUF"),
+    ("Travailleurs / Bokk Diom / WIEGO", "Approche par les pairs, focus groups, restitution", "Mouhamadou WADE"),
+]
+
 # ------------------------------------------------------------- Photos --------
 
 def extraire_photos(records: list, form: dict) -> list:
@@ -644,9 +681,9 @@ st.sidebar.metric("Enquêtes affichées", f"{len(fdf)} / {len(df)}")
 
 # ----------------------------------------------------------------- Corps ----
 
-tab1, tab2, tab3, tab4, tab6, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab6, tab7, tab5 = st.tabs(
     ["📊 Suivi des enquêtes", "🗺️ Carte", "📈 Analyse thématique",
-     "🗣️ Qualitatif", "📷 Photos", "📥 Données & export"])
+     "🗣️ Qualitatif", "📷 Photos", "🤝 Parties prenantes", "📥 Données & export"])
 
 # ============================================== 1. SUIVI DES ENQUÊTES ========
 with tab1:
@@ -986,6 +1023,56 @@ with tab6:
                         col.caption("🚫 Image indisponible")
                     legende = " · ".join(x for x in (p["commune"], p["date"]) if x)
                     col.caption(f"#{p['id']} - {legende}" if legende else f"#{p['id']}")
+
+# ================================================== 7. PARTIES PRENANTES =====
+with tab7:
+    pp = pd.DataFrame(PARTIES_PRENANTES,
+                      columns=["Catégorie", "Partie prenante", "Rôle",
+                               "Niveau d'influence", "Apport au processus"])
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Parties prenantes", len(pp))
+    c2.metric("Catégories", pp["Catégorie"].nunique())
+    c3.metric("Influence forte", int((pp["Niveau d'influence"] == "Haut").sum()))
+
+    g1, g2 = st.columns(2)
+    with g1:
+        d = pp["Catégorie"].value_counts().reset_index()
+        d.columns = ["Catégorie", "Acteurs"]
+        fig = px.bar(d.sort_values("Acteurs"), x="Acteurs", y="Catégorie", orientation="h",
+                     title="Acteurs par catégorie", text_auto=True)
+        fig.update_layout(height=380, yaxis_title="")
+        st.plotly_chart(fig, width="stretch")
+    with g2:
+        ordre_inf = ["Haut", "Moyen", "Bas"]
+        d = (pp["Niveau d'influence"].value_counts()
+             .reindex(ordre_inf).fillna(0).reset_index())
+        d.columns = ["Niveau", "Acteurs"]
+        fig = px.pie(d, names="Niveau", values="Acteurs", hole=0.45,
+                     title="Répartition par niveau d'influence",
+                     color="Niveau",
+                     color_discrete_map={"Haut": "#1b5e20", "Moyen": "#66bb6a",
+                                         "Bas": "#c5e1a5"})
+        fig.update_traces(textinfo="percent+value")
+        fig.update_layout(height=380)
+        st.plotly_chart(fig, width="stretch")
+
+    f1, f2 = st.columns(2)
+    cats = f1.multiselect("Filtrer par catégorie", sorted(pp["Catégorie"].unique()))
+    infs = f2.multiselect("Filtrer par niveau d'influence", ["Haut", "Moyen", "Bas"])
+    vue = pp.copy()
+    if cats:
+        vue = vue[vue["Catégorie"].isin(cats)]
+    if infs:
+        vue = vue[vue["Niveau d'influence"].isin(infs)]
+    st.dataframe(vue, width="stretch", hide_index=True, height=420)
+
+    st.subheader("Protocoles d'engagement")
+    st.caption("Modalités de relation et référent SGP pour chaque catégorie d'acteurs")
+    st.dataframe(pd.DataFrame(PROTOCOLES,
+                              columns=["Catégorie", "Modalités", "Référent SGP"]),
+                 width="stretch", hide_index=True)
+    st.caption("Source : Cartographie des parties prenantes - Mission C40 Cities · "
+               "Ville de Dakar")
 
 # ==================================================== 5. DONNÉES & EXPORT ====
 with tab5:
