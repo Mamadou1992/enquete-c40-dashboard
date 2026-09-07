@@ -285,6 +285,39 @@ def explode_multiple(df: pd.DataFrame, col: str, form: dict) -> pd.Series:
     return pd.Series(vals).value_counts()
 
 
+# ------------------------------------------------------------- Photos --------
+
+def extraire_photos(records: list, form: dict) -> list:
+    """Liste les photos jointes aux soumissions (pièces jointes Kobo)."""
+    photos = []
+    codes_communes = form["choices"].get(form["listname"].get(COL["commune"], ""), {})
+    for rec in records:
+        infos = {k.split("/")[-1]: v for k, v in rec.items()}
+        brut = infos.get(COL["commune"]) or infos.get("commune_lieu") or ""
+        commune = codes_communes.get(brut, brut)
+        for att in rec.get("_attachments") or []:
+            mime = str(att.get("mimetype", ""))
+            if not mime.startswith("image"):
+                continue
+            photos.append({
+                "url": att.get("download_medium_url") or att.get("download_url"),
+                "url_pleine": att.get("download_url"),
+                "fichier": str(att.get("filename", "")).split("/")[-1],
+                "id": rec.get("_id"),
+                "date": str(infos.get("_submission_time", ""))[:10],
+                "commune": commune,
+                "enqueteur": infos.get(COL["enqueteur"]) or infos.get("animateur") or "",
+            })
+    return photos
+
+
+def telecharger_image(url: str, token: str) -> bytes:
+    """Télécharge une image protégée par le jeton Kobo."""
+    r = requests.get(url, headers=kobo_headers(token), timeout=60)
+    r.raise_for_status()
+    return r.content
+
+
 # ------------------------------------------- Plan d'échantillonnage C40 -------
 # Source : Plan d'échantillonnage stratifié par commune (ANSD 2023, 400 enquêtes)
 PLAN_TOTAL = 400
@@ -502,6 +535,11 @@ def get_data(base_url, token, uid):
     return fetch_submissions(base_url, token, uid)
 
 
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=200)
+def get_image(url, token):
+    return telecharger_image(url, token)
+
+
 try:
     form = get_form("quanti")
     form_q = get_form("quali")
@@ -597,9 +635,9 @@ st.sidebar.metric("Enquêtes affichées", f"{len(fdf)} / {len(df)}")
 
 # ----------------------------------------------------------------- Corps ----
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab6, tab5 = st.tabs(
     ["📊 Suivi des enquêtes", "🗺️ Carte", "📈 Analyse thématique",
-     "🗣️ Qualitatif", "📥 Données & export"])
+     "🗣️ Qualitatif", "📷 Photos", "📥 Données & export"])
 
 # ============================================== 1. SUIVI DES ENQUÊTES ========
 with tab1:
@@ -904,6 +942,39 @@ with tab4:
                 sous = dfq[dfq["type_outil"] == corresp[gq]]
                 st.caption(f"{len(sous)} fiche(s) de ce type")
         afficher_questions(sous, form_q, questions_de(form_q, sous, libelles_q[gq]), "quali")
+
+# =============================================================== 6. PHOTOS ===
+with tab6:
+    photos = extraire_photos(records, form) + extraire_photos(records_q, form_q)
+    if not photos:
+        st.info("Aucune photo pour le moment. Les clichés pris par les enquêteurs "
+                "apparaîtront ici automatiquement.")
+    else:
+        st.metric("Photos disponibles", len(photos))
+        communes = sorted({p["commune"] for p in photos if p["commune"]})
+        f1, f2 = st.columns([2, 1])
+        with f1:
+            sel = st.multiselect("Filtrer par commune", communes) if communes else []
+        with f2:
+            par_page = st.selectbox("Photos par page", [12, 24, 48], index=0)
+        vues = [p for p in photos if not sel or p["commune"] in sel]
+
+        pages = max(1, (len(vues) + par_page - 1) // par_page)
+        page = st.number_input(f"Page (sur {pages})", min_value=1, max_value=pages,
+                               value=1, step=1) if pages > 1 else 1
+        lot = vues[(int(page) - 1) * par_page:int(page) * par_page]
+        st.caption(f"{len(vues)} photo(s) - affichage {len(lot)}")
+
+        for debut in range(0, len(lot), 4):
+            cols = st.columns(4)
+            for col, p in zip(cols, lot[debut:debut + 4]):
+                with col:
+                    try:
+                        col.image(get_image(p["url"], token), width="stretch")
+                    except Exception:
+                        col.caption("🚫 Image indisponible")
+                    legende = " · ".join(x for x in (p["commune"], p["date"]) if x)
+                    col.caption(f"#{p['id']} - {legende}" if legende else f"#{p['id']}")
 
 # ==================================================== 5. DONNÉES & EXPORT ====
 with tab5:
