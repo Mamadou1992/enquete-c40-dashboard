@@ -19,13 +19,38 @@ import requests
 FORM_QUANTI = {
     "titre": "Enquête individuelle",
     "uid": "ahVcrcrzvdoNYwkFSNjUpj",
-    "xlsform": "Évaluation des besoins des travailleurs informels du secteur des déchets - Dakar.xlsx",
+    "xlsform": "form_quanti.xlsx",
+    # noms alternatifs acceptés (ancien nommage avec accents et espaces)
+    "alias": ["Évaluation des besoins des travailleurs informels du secteur des déchets - Dakar.xlsx"],
+    "motif": "valuation des besoins",
 }
 FORM_QUALI = {
     "titre": "Entretiens & focus groups",
     "uid": "aotuV7h5fdZe8LDS3KF6KP",
-    "xlsform": "Grille de saisie qualitative (entretiens et focus groups).xlsx",
+    "xlsform": "form_quali.xlsx",
+    "alias": ["Grille de saisie qualitative (entretiens et focus groups).xlsx"],
+    "motif": "qualitative",
 }
+
+
+def trouver_xlsform(dossier: str, config: dict) -> str:
+    """Retourne le chemin du XLSForm : nom principal, alias, puis recherche par motif.
+    Robuste aux différences d'encodage des noms de fichiers (Windows / Linux)."""
+    candidats = [config["xlsform"]] + list(config.get("alias", []))
+    for nom in candidats:
+        chemin = os.path.join(dossier, nom)
+        if os.path.exists(chemin):
+            return chemin
+    motif = config.get("motif", "").lower()
+    if motif:
+        for f in sorted(os.listdir(dossier)):
+            if f.lower().endswith((".xlsx", ".xls")) and motif in f.lower():
+                return os.path.join(dossier, f)
+    raise FileNotFoundError(
+        f"XLSForm introuvable pour « {config['titre']} ». Attendu : {config['xlsform']} "
+        f"dans {dossier}. Fichiers présents : "
+        + ", ".join(f for f in sorted(os.listdir(dossier)) if f.lower().endswith(".xlsx"))
+    )
 
 # Colonnes clés du formulaire quantitatif
 COL = {

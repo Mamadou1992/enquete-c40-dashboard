@@ -100,8 +100,9 @@ verifier_acces()
 # ----------------------------------------------------------- Chargements ----
 
 @st.cache_resource
-def get_form(xlsform):
-    return ku.load_xlsform(os.path.join(APP_DIR, xlsform))
+def get_form(cle):
+    config = ku.FORM_QUANTI if cle == "quanti" else ku.FORM_QUALI
+    return ku.load_xlsform(ku.trouver_xlsform(APP_DIR, config))
 
 
 @st.cache_resource
@@ -115,9 +116,20 @@ def get_data(base_url, token, uid):
     return ku.fetch_submissions(base_url, token, uid)
 
 
-form = get_form(ku.FORM_QUANTI["xlsform"])
-form_q = get_form(ku.FORM_QUALI["xlsform"])
-geojson = get_geojson()
+@st.cache_data(ttl=300)
+def get_assets(base_url, token):
+    return ku.list_assets(base_url, token)
+
+
+try:
+    form = get_form("quanti")
+    form_q = get_form("quali")
+    geojson = get_geojson()
+except FileNotFoundError as e:
+    st.error(f"Fichier manquant : {e}")
+    st.info("Vérifiez que `form_quanti.xlsx`, `form_quali.xlsx` et "
+            "`communes_dakar.geojson` sont bien présents à côté de `app.py`.")
+    st.stop()
 
 # --------------------------------------------------------------- Sidebar ----
 
@@ -166,7 +178,57 @@ df = ku.to_dataframe(records, form)
 dfq = ku.to_dataframe(records_q, form_q)
 
 if df.empty:
-    st.info("Aucune soumission de l'enquête individuelle pour le moment.")
+    st.title("♻️ Enquête C40 GREEN+ - Dakar")
+    st.info("**La collecte n'a pas encore démarré.** Le tableau de bord se remplira "
+            "automatiquement dès les premières soumissions Kobo (bouton « Actualiser » "
+            "dans la barre latérale pour forcer le rafraîchissement).")
+
+    if not dfq.empty:
+        st.success(f"{len(dfq)} fiche(s) qualitative(s) déjà saisie(s) - "
+                   "l'onglet Qualitatif sera disponible dès qu'il y aura des enquêtes "
+                   "individuelles.")
+
+    with st.expander("🔎 Formulaires détectés sur le compte Kobo", expanded=True):
+        try:
+            assets = get_assets(base_url, token)
+            if assets:
+                da = pd.DataFrame(assets).rename(
+                    columns={"name": "Formulaire", "uid": "Identifiant",
+                             "count": "Soumissions"})
+                da["Utilisé par la plateforme"] = da["Identifiant"].map(
+                    lambda u: "Enquête individuelle" if u == uid
+                    else ("Qualitatif" if u == uid_q else ""))
+                st.dataframe(da[["Formulaire", "Identifiant", "Soumissions",
+                                 "Utilisé par la plateforme"]],
+                             width="stretch", hide_index=True)
+                st.caption("Si vos données se trouvent dans un autre formulaire, corrigez "
+                           "`asset_uid` dans les secrets de l'application.")
+            else:
+                st.write("Aucun formulaire déployé trouvé sur ce compte.")
+        except Exception as e:
+            st.warning(f"Liste des formulaires indisponible : {e}")
+
+    st.subheader("Plan d'échantillonnage prévu")
+    plan = pd.DataFrame({"key": [f["properties"]["key"] for f in geojson["features"]],
+                         "Commune": [f["properties"]["commune"] for f in geojson["features"]]})
+    plan["Population ANSD 2023"] = plan["key"].map(lambda k: ku.PLAN_QUOTAS.get(k, (0, 0))[0])
+    plan["Enquêtes à réaliser"] = plan["key"].map(lambda k: ku.PLAN_QUOTAS.get(k, (0, 0))[1])
+    g, d = st.columns([3, 2])
+    with g:
+        fig = px.choropleth_map(plan, geojson=geojson, locations="key",
+                                featureidkey="properties.key", color="Enquêtes à réaliser",
+                                hover_name="Commune", color_continuous_scale="Greens",
+                                center={"lat": 14.716, "lon": -17.45}, zoom=10.4,
+                                opacity=0.65, height=520)
+        fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0}, map_style="carto-positron")
+        st.plotly_chart(fig, width="stretch")
+    with d:
+        st.dataframe(plan[["Commune", "Population ANSD 2023", "Enquêtes à réaliser"]]
+                     .sort_values("Enquêtes à réaliser", ascending=False),
+                     width="stretch", hide_index=True, height=520)
+    st.caption(f"Total : {ku.PLAN_TOTAL} enquêtes · quotas transversaux : "
+               f"≥ 40 % de femmes, ≥ 25 % de jeunes (< {ku.AGE_JEUNE_MAX} ans), "
+               "≥ 15 % de migrants")
     st.stop()
 
 C = ku.COL
