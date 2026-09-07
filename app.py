@@ -124,11 +124,6 @@ def get_data(base_url, token, uid):
     return ku.fetch_submissions(base_url, token, uid)
 
 
-@st.cache_data(ttl=300)
-def get_assets(base_url, token):
-    return ku.list_assets(base_url, token)
-
-
 try:
     form = get_form("quanti")
     form_q = get_form("quali")
@@ -185,59 +180,14 @@ except Exception:
 df = ku.to_dataframe(records, form)
 dfq = ku.to_dataframe(records_q, form_q)
 
-if df.empty:
-    st.title("♻️ Enquête C40 GREEN+ - Dakar")
-    st.info("**La collecte n'a pas encore démarré.** Le tableau de bord se remplira "
-            "automatiquement dès les premières soumissions Kobo (bouton « Actualiser » "
-            "dans la barre latérale pour forcer le rafraîchissement).")
-
-    if not dfq.empty:
-        st.success(f"{len(dfq)} fiche(s) qualitative(s) déjà saisie(s) - "
-                   "l'onglet Qualitatif sera disponible dès qu'il y aura des enquêtes "
-                   "individuelles.")
-
-    with st.expander("🔎 Formulaires détectés sur le compte Kobo", expanded=True):
-        try:
-            assets = get_assets(base_url, token)
-            if assets:
-                da = pd.DataFrame(assets).rename(
-                    columns={"name": "Formulaire", "uid": "Identifiant",
-                             "count": "Soumissions"})
-                da["Utilisé par la plateforme"] = da["Identifiant"].map(
-                    lambda u: "Enquête individuelle" if u == uid
-                    else ("Qualitatif" if u == uid_q else ""))
-                st.dataframe(da[["Formulaire", "Identifiant", "Soumissions",
-                                 "Utilisé par la plateforme"]],
-                             width="stretch", hide_index=True)
-                st.caption("Si vos données se trouvent dans un autre formulaire, corrigez "
-                           "`asset_uid` dans les secrets de l'application.")
-            else:
-                st.write("Aucun formulaire déployé trouvé sur ce compte.")
-        except Exception as e:
-            st.warning(f"Liste des formulaires indisponible : {e}")
-
-    st.subheader("Plan d'échantillonnage prévu")
-    plan = pd.DataFrame({"key": [f["properties"]["key"] for f in geojson["features"]],
-                         "Commune": [f["properties"]["commune"] for f in geojson["features"]]})
-    plan["Population ANSD 2023"] = plan["key"].map(lambda k: ku.PLAN_QUOTAS.get(k, (0, 0))[0])
-    plan["Enquêtes à réaliser"] = plan["key"].map(lambda k: ku.PLAN_QUOTAS.get(k, (0, 0))[1])
-    g, d = st.columns([3, 2])
-    with g:
-        fig = px.choropleth_map(plan, geojson=geojson, locations="key",
-                                featureidkey="properties.key", color="Enquêtes à réaliser",
-                                hover_name="Commune", color_continuous_scale="Greens",
-                                center={"lat": 14.716, "lon": -17.45}, zoom=10.4,
-                                opacity=0.65, height=520)
-        fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0}, map_style="carto-positron")
-        st.plotly_chart(fig, width="stretch")
-    with d:
-        st.dataframe(plan[["Commune", "Population ANSD 2023", "Enquêtes à réaliser"]]
-                     .sort_values("Enquêtes à réaliser", ascending=False),
-                     width="stretch", hide_index=True, height=520)
-    st.caption(f"Total : {ku.PLAN_TOTAL} enquêtes · quotas transversaux : "
-               f"≥ 40 % de femmes, ≥ 25 % de jeunes (< {ku.AGE_JEUNE_MAX} ans), "
-               "≥ 15 % de migrants")
-    st.stop()
+# Avant la collecte : tableau de bord complet avec des compteurs à zéro
+collecte_vide = df.empty
+if collecte_vide:
+    df = ku.dataframe_vide(form)
+    st.info("**La collecte n'a pas encore démarré.** Le tableau de bord ci-dessous est "
+            "prêt : compteurs à zéro, plan d'échantillonnage affiché. Il se remplira "
+            "automatiquement dès les premières soumissions Kobo (bouton « 🔄 Actualiser » "
+            "dans la barre latérale).")
 
 C = ku.COL
 
@@ -281,8 +231,9 @@ with tab1:
     c2.metric("Communes couvertes", f"{nb_com} / 19")
     nb_enq = fdf[C["enqueteur"]].nunique() if C["enqueteur"] in fdf else 0
     c3.metric("Enquêteurs actifs", nb_enq)
-    if C["consent"] in fdf and len(fdf):
-        cons = fdf[C["consent"]].astype(str).str.lower().str.startswith("oui").mean()
+    if C["consent"] in fdf:
+        cons = (fdf[C["consent"]].astype(str).str.lower().str.startswith("oui").mean()
+                if len(fdf) else 0.0)
         c4.metric("Taux de consentement", f"{cons:.0%}")
 
     prog = len(fdf) / ku.PLAN_TOTAL
@@ -291,20 +242,19 @@ with tab1:
 
     st.markdown("**Quotas transversaux du plan C40**")
     q1, q2, q3 = st.columns(3)
-    if C["sexe"] in fdf and len(fdf):
-        p = (fdf[C["sexe"]].astype(str) == "Femme").mean()
-        q1.metric("Femmes (cible >= 40 %)", f"{p:.0%}", delta=f"{(p - 0.40) * 100:+.0f} pts")
-    if C["age"] in fdf and fdf[C["age"]].notna().any():
-        p = (fdf[C["age"]] < ku.AGE_JEUNE_MAX).mean()
-        q2.metric(f"Jeunes < {ku.AGE_JEUNE_MAX} ans (cible >= 25 %)", f"{p:.0%}",
-                  delta=f"{(p - 0.25) * 100:+.0f} pts")
-    if C["migratoire"] in fdf and len(fdf):
-        p = fdf[C["migratoire"]].astype(str).str.contains("migrant", case=False).mean()
-        q3.metric("Migrants (cible >= 15 %)", f"{p:.0%}", delta=f"{(p - 0.15) * 100:+.0f} pts")
+    p = (fdf[C["sexe"]].astype(str) == "Femme").mean() if (C["sexe"] in fdf and len(fdf)) else 0.0
+    q1.metric("Femmes (cible >= 40 %)", f"{p:.0%}", delta=f"{(p - 0.40) * 100:+.0f} pts")
+    ages = pd.to_numeric(fdf[C["age"]], errors="coerce").dropna() if C["age"] in fdf else pd.Series(dtype=float)
+    p = (ages < ku.AGE_JEUNE_MAX).mean() if len(ages) else 0.0
+    q2.metric(f"Jeunes < {ku.AGE_JEUNE_MAX} ans (cible >= 25 %)", f"{p:.0%}",
+              delta=f"{(p - 0.25) * 100:+.0f} pts")
+    p = (fdf[C["migratoire"]].astype(str).str.contains("migrant", case=False).mean()
+         if (C["migratoire"] in fdf and len(fdf)) else 0.0)
+    q3.metric("Migrants (cible >= 15 %)", f"{p:.0%}", delta=f"{(p - 0.15) * 100:+.0f} pts")
 
     g1, g2 = st.columns(2)
     with g1:
-        if "date_soumission" in fdf:
+        if "date_soumission" in fdf and fdf["date_soumission"].notna().any():
             par_jour = fdf.groupby("date_soumission").size().reset_index(name="Enquêtes")
             fig = px.area(par_jour, x="date_soumission", y="Enquêtes", markers=True,
                           title="Évolution des soumissions par jour",
@@ -312,8 +262,9 @@ with tab1:
             st.plotly_chart(fig, width="stretch")
     with g2:
         # Quotas par fonction (plan : 60 % charretiers, 20 % récupérateurs, 15 % trieurs)
-        if C["fonction"] in fdf and fdf[C["fonction"]].notna().any():
-            obs = fdf[C["fonction"]].value_counts(normalize=True) * 100
+        if C["fonction"] in fdf:
+            obs = (fdf[C["fonction"]].value_counts(normalize=True) * 100
+                   if fdf[C["fonction"]].notna().any() else pd.Series(dtype=float))
             lignes = []
             for fonction, part in ku.PLAN_FONCTIONS.items():
                 lignes.append({"Fonction": fonction, "Part": obs.get(fonction, 0.0),
@@ -327,7 +278,7 @@ with tab1:
 
     g3, g4 = st.columns(2)
     with g3:
-        if C["commune"] in fdf:
+        if C["commune"] in fdf and fdf[C["commune"]].notna().any():
             par_com = fdf[C["commune"]].value_counts().reset_index()
             par_com.columns = ["Commune", "Enquêtes"]
             fig = px.bar(par_com.sort_values("Enquêtes"), x="Enquêtes", y="Commune",
@@ -335,7 +286,7 @@ with tab1:
             fig.update_layout(height=520, yaxis_title="")
             st.plotly_chart(fig, width="stretch")
     with g4:
-        if C["enqueteur"] in fdf:
+        if C["enqueteur"] in fdf and fdf[C["enqueteur"]].notna().any():
             par_enq = fdf[C["enqueteur"]].value_counts().reset_index()
             par_enq.columns = ["Enquêteur", "Enquêtes"]
             fig = px.bar(par_enq, x="Enquêteur", y="Enquêtes", text_auto=True,
@@ -348,9 +299,10 @@ with tab2:
     left, right = st.columns([3, 1])
     with right:
         fond = st.radio("Affichage", ["Points GPS", "Densité par commune", "Les deux"], index=2)
-        indicateur = st.radio("Couleur des communes",
-                              ["Enquêtes réalisées", "Taux de réalisation (%)",
-                               "Quota du plan", "Population ANSD 2023"])
+        choix_ind = ["Enquêtes réalisées", "Taux de réalisation (%)",
+                     "Quota du plan", "Population ANSD 2023"]
+        indicateur = st.radio("Couleur des communes", choix_ind,
+                              index=2 if collecte_vide else 0)
 
     counts = pd.DataFrame({"key": [], "Enquêtes réalisées": []})
     if C["commune"] in fdf:
