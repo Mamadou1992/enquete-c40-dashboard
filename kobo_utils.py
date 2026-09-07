@@ -300,6 +300,38 @@ PLAN_QUOTAS = {  # clé GeoJSON -> (population ANSD 2023, quota d'enquêtes)
     "NGOR": (17706, 6),
     "GOREE": (1691, 2),
 }
+# ------------------------------------------------ Plan qualitatif prévu ------
+# Nombre de séances / entretiens attendus pour chaque item.
+# Modifiez ces valeurs si le plan de collecte qualitative évolue.
+PLAN_QUALI = {
+    "groupe_fg": 1,        # 1 séance par focus group (FG1 à FG6)
+    "profil_ind": 2,       # 2 entretiens par profil de répondant
+    "structure_inst": 1,   # 1 entretien par type de structure
+}
+PLAN_QUALI_LIBELLES = {
+    "groupe_fg": "Focus groups",
+    "profil_ind": "Entretiens individuels (par profil)",
+    "structure_inst": "Entretiens institutionnels (par structure)",
+}
+
+
+def suivi_plan_quali(dfq: pd.DataFrame, form_q: dict, champ: str) -> pd.DataFrame:
+    """Compare le réalisé à la cible pour un champ du plan qualitatif."""
+    cibles = form_q["choices"].get(form_q["listname"].get(champ, ""), {})
+    attendu = PLAN_QUALI.get(champ, 1)
+    realise = (dfq[champ].astype(str).value_counts()
+               if (champ in dfq.columns and not dfq.empty) else pd.Series(dtype=int))
+    lignes = []
+    for libelle in cibles.values():
+        lib = str(libelle).strip()
+        fait = int(realise.get(lib, 0))
+        lignes.append({"Item": lib, "Réalisé": fait, "Prévu": attendu,
+                       "Reste": max(attendu - fait, 0),
+                       "Statut": "✅ Fait" if fait >= attendu else
+                                 ("🟡 En cours" if fait else "⬜ À faire")})
+    return pd.DataFrame(lignes)
+
+
 # Quotas transversaux (part minimale attendue) et par fonction
 PLAN_TRANSVERSAL = {"femmes": 0.40, "jeunes": 0.25, "migrants": 0.15}
 PLAN_FONCTIONS = {"Charretier de pré-collecte": 0.60, "Récupérateur": 0.20,

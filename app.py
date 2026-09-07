@@ -441,10 +441,46 @@ with tab3:
     afficher_questions(fdf, form, questions_de(form, fdf, libelles[gsel]), "quanti")
 
 # ========================================================== 4. QUALITATIF ====
+def suivi_plan_qualitatif(donnees):
+    """Ce qui est réalisé et ce qui reste, pour les focus groups, les profils
+    d'entretiens individuels et les structures institutionnelles."""
+    st.subheader("Suivi du plan qualitatif")
+    total_prevu = total_fait = 0
+    tables = {}
+    for champ in ("groupe_fg", "profil_ind", "structure_inst"):
+        t = ku.suivi_plan_quali(donnees, form_q, champ)
+        if not t.empty:
+            tables[champ] = t
+            total_prevu += int(t["Prévu"].sum())
+            total_fait += int(t["Réalisé"].sum())
+    if not tables:
+        return
+    avance = total_fait / total_prevu if total_prevu else 0
+    st.progress(min(avance, 1.0),
+                text=f"Avancement global : {total_fait} / {total_prevu} "
+                     f"séances et entretiens ({avance:.0%})")
+    cols = st.columns(len(tables))
+    for col, (champ, t) in zip(cols, tables.items()):
+        with col:
+            fait = int((t["Réalisé"] >= t["Prévu"]).sum())
+            st.markdown(f"**{ku.PLAN_QUALI_LIBELLES[champ]}** - {fait}/{len(t)} complétés")
+            st.dataframe(t[["Item", "Réalisé", "Prévu", "Statut"]], width="stretch",
+                         hide_index=True, height=min(38 * len(t) + 40, 300))
+    manque = []
+    for champ, t in tables.items():
+        manque += list(t.loc[t["Réalisé"] == 0, "Item"])
+    if manque:
+        st.warning("**Pas encore réalisé :** " + " · ".join(manque))
+    else:
+        st.success("Toutes les séances et tous les entretiens prévus sont couverts.")
+    st.caption("Cibles modifiables dans `kobo_utils.py` (variable `PLAN_QUALI`).")
+
+
 with tab4:
     if dfq.empty:
-        st.info("Aucun entretien ni focus group saisi pour le moment. "
-                f"Formulaire : {ku.FORM_QUALI['titre']}.")
+        st.info("Aucun entretien ni focus group saisi pour le moment - le plan ci-dessous "
+                "se cochera au fur et à mesure de la collecte qualitative.")
+        suivi_plan_qualitatif(dfq)
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Fiches saisies", len(dfq))
@@ -481,6 +517,9 @@ with tab4:
             cs = st.columns(len(tot))
             for col, (k, v) in zip(cs, tot.items()):
                 col.metric(k.replace("dont ", "Dont "), v)
+
+        st.divider()
+        suivi_plan_qualitatif(dfq)
 
         st.divider()
         libelles_q = {form_q["groups"][g]: g for g in form_q["ordre_groupes"]}
