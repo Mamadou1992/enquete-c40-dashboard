@@ -345,11 +345,17 @@ PLAN_QUOTAS = {  # clé GeoJSON -> (population ANSD 2023, quota d'enquêtes)
 # ------------------------------------------------ Plan qualitatif prévu ------
 # Nombre de séances / entretiens attendus pour chaque item.
 # Modifiez ces valeurs si le plan de collecte qualitative évolue.
+# Source : Rapport méthodologique SGP x C40 (sources primaires)
+#   - 6 focus groups thématiques de 8 à 10 participants
+#   - ~30 entretiens semi-directifs approfondis par profil (5 profils -> 6 chacun)
+#   - ~15 entretiens institutionnels (4 types de structures -> 4 chacun, soit 16)
 PLAN_QUALI = {
-    "groupe_fg": 1,        # 1 séance par focus group (FG1 à FG6)
-    "profil_ind": 2,       # 2 entretiens par profil de répondant
-    "structure_inst": 1,   # 1 entretien par type de structure
+    "groupe_fg": 1,        # 6 focus groups au total (1 séance par groupe FG1 à FG6)
+    "profil_ind": 6,       # 30 entretiens individuels répartis sur 5 profils
+    "structure_inst": 4,   # ~15 entretiens institutionnels sur 4 types de structures
 }
+# Fourchette de participants attendue par focus group (rapport méthodologique)
+FG_PARTICIPANTS = (8, 10)
 PLAN_QUALI_LIBELLES = {
     "groupe_fg": "Focus groups",
     "profil_ind": "Entretiens individuels (par profil)",
@@ -376,8 +382,11 @@ def suivi_plan_quali(dfq: pd.DataFrame, form_q: dict, champ: str) -> pd.DataFram
 
 # Quotas transversaux (part minimale attendue) et par fonction
 PLAN_TRANSVERSAL = {"femmes": 0.40, "jeunes": 0.25, "migrants": 0.15}
-PLAN_FONCTIONS = {"Charretier de pré-collecte": 0.60, "Récupérateur": 0.20,
-                  "Trieur": 0.15, "Autre": 0.05}
+# Échantillon stratifié par fonction : 240 charretiers, 80 récupérateurs,
+# 60 trieurs, 20 autres (rapport méthodologique)
+PLAN_FONCTIONS_N = {"Charretier de pré-collecte": 240, "Récupérateur": 80,
+                    "Trieur": 60, "Autre": 20}
+PLAN_FONCTIONS = {k: v / 400 for k, v in PLAN_FONCTIONS_N.items()}
 AGE_JEUNE_MAX = 35  # « jeunes » = moins de 35 ans
 
 
@@ -688,7 +697,8 @@ with tab1:
                 lignes.append({"Fonction": fonction, "Part": part * 100, "Type": "Cible"})
             d = pd.DataFrame(lignes)
             fig = px.bar(d, x="Part", y="Fonction", color="Type", barmode="group",
-                         orientation="h", title="Quotas par fonction (% des enquêtes)",
+                         orientation="h",
+                         title="Quotas par fonction (% - cibles 240/80/60/20)",
                          color_discrete_sequence=["#1b5e20", "#9ccc65"])
             st.plotly_chart(fig, width="stretch")
 
@@ -922,7 +932,8 @@ with tab4:
         if cols_part:
             tot = {form_q["label"].get(c, c): int(pd.to_numeric(dfq[c], errors="coerce").sum())
                    for c in cols_part}
-            st.markdown("**Participants aux focus groups**")
+            st.markdown("**Participants aux focus groups** "
+                        f"(cible : {FG_PARTICIPANTS[0]} à {FG_PARTICIPANTS[1]} par séance)")
             cs = st.columns(len(tot))
             for col, (k, v) in zip(cs, tot.items()):
                 col.metric(k.replace("dont ", "Dont "), v)
