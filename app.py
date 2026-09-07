@@ -845,7 +845,6 @@ def suivi_plan_qualitatif(donnees):
         st.warning("**Pas encore réalisé :** " + " · ".join(manque))
     else:
         st.success("Toutes les séances et tous les entretiens prévus sont couverts.")
-    st.caption("Cibles modifiables dans `kobo_utils.py` (variable `PLAN_QUALI`).")
 
 
 with tab4:
