@@ -529,39 +529,6 @@ div[data-testid="stDownloadButton"] button:hover { background-color: #0d3f14 !im
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------------------------------------- Authentification ----
-
-MOT_DE_PASSE_DEFAUT = "senegalgreen+"
-
-
-def verifier_acces():
-    """Affiche un écran de connexion tant que le mot de passe n'est pas saisi."""
-    attendu = st.secrets.get("acces", {}).get("mot_de_passe", MOT_DE_PASSE_DEFAUT)
-    if st.session_state.get("authentifie"):
-        return
-
-    _, centre, _ = st.columns([1, 2, 1])
-    with centre:
-        if os.path.exists(LOGO):
-            g, d = st.columns([1, 3])
-            g.image(LOGO, width=110)
-            d.markdown("### Enquête C40 GREEN+")
-        else:
-            st.markdown("### ♻️ Enquête C40 GREEN+")
-        st.caption("Plateforme de suivi - Travailleurs informels des déchets, Dakar")
-        saisie = st.text_input("Mot de passe", type="password",
-                               placeholder="Saisissez le mot de passe d'accès")
-        if st.button("Se connecter", width="stretch"):
-            if saisie == attendu:
-                st.session_state["authentifie"] = True
-                st.rerun()
-            else:
-                st.error("Mot de passe incorrect.")
-    st.stop()
-
-
-verifier_acces()
-
 # ----------------------------------------------------------- Chargements ----
 
 @st.cache_resource
@@ -617,10 +584,6 @@ with st.sidebar.expander("⚙️ Connexion Kobo", expanded=not token):
 
 if st.sidebar.button("🔄 Actualiser les données"):
     get_data.clear()
-    st.rerun()
-
-if st.sidebar.button("🔒 Se déconnecter"):
-    st.session_state["authentifie"] = False
     st.rerun()
 
 # ------------------------------------------------------------- Données ------
