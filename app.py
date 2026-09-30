@@ -813,84 +813,6 @@ with tab1:
          if (C["migratoire"] in fdf and len(fdf)) else 0.0)
     q3.metric("Migrants (cible >= 15 %)", f"{p:.0%}", delta=f"{(p - 0.15) * 100:+.0f} pts")
 
-    # Contrôle qualité : commune déclarée par l'enquêteur vs commune du point GPS
-    ecarts = controler_communes(fdf, get_index_communes(), form)
-    if not ecarts.empty:
-        st.warning(f"⚠️ **{len(ecarts)} enquête(s) dont la commune déclarée ne "
-                   "correspond pas au point GPS.** Le quota de la commune réellement "
-                   "visitée est donc sous-évalué, celui de la commune déclarée "
-                   "sur-évalué.")
-        with st.expander(f"🔎 Voir les {len(ecarts)} écart(s) commune / GPS",
-                         expanded=True):
-            resume = (ecarts.groupby(["Commune déclarée", "Commune du point GPS"])
-                      .size().reset_index(name="Enquêtes")
-                      .sort_values("Enquêtes", ascending=False))
-            st.markdown("**Écarts les plus fréquents**")
-            st.dataframe(resume, width="stretch", hide_index=True)
-            st.markdown("**Détail des fiches concernées**")
-            st.dataframe(ecarts.drop(columns=["latitude", "longitude"]),
-                         width="stretch", hide_index=True)
-            st.download_button(
-                "⬇️ Télécharger la liste à corriger",
-                ecarts.to_csv(index=False).encode("utf-8-sig"),
-                "C40_communes_a_corriger.csv", "text/csv", key="dl_ecarts")
-
-            st.divider()
-            st.markdown("**Corriger dans KoboToolbox**")
-            st.caption("La commune déclarée est remplacée par celle du point GPS, "
-                       "directement dans les soumissions Kobo. Kobo garde l'historique "
-                       "de chaque soumission, mais la plateforme ne peut pas annuler "
-                       "l'opération : vérifiez la liste ci-dessus avant de lancer.")
-
-            codes_communes = {v: k for k, v in
-                              form["choices"].get(
-                                  form["listname"].get(C["commune"], ""), {}).items()}
-            paires = [(r["Commune déclarée"], r["Commune du point GPS"], int(r["Enquêtes"]))
-                      for _, r in resume.iterrows()]
-            libelles_paires = [f"{d} -> {g}  ({n} fiche(s))" for d, g, n in paires]
-            choix = st.multiselect("Corrections à appliquer", libelles_paires,
-                                   default=libelles_paires, key="choix_corrections")
-            selection = [p for p, lib in zip(paires, libelles_paires) if lib in choix]
-            fiches = [int(r["N° fiche"]) for _, r in ecarts.iterrows()
-                      if any(r["Commune déclarée"] == d and r["Commune du point GPS"] == g
-                             for d, g, _ in selection)
-                      and pd.notna(r["N° fiche"])]
-
-            confirme = st.checkbox(
-                f"Je confirme la correction de {len(fiches)} fiche(s) dans KoboToolbox",
-                key="confirme_correction")
-            if st.button("✍️ Appliquer la correction dans Kobo",
-                         disabled=not (confirme and fiches), key="btn_correction"):
-                manquants = [g for _, g, _ in selection if g not in codes_communes]
-                if manquants:
-                    st.error("Commune absente de la liste de choix du formulaire : "
-                             + ", ".join(sorted(set(manquants))))
-                else:
-                    xpath = xpath_du_champ(records, C["commune"])
-                    resultats, echecs = [], []
-                    for declaree, reelle, _ in selection:
-                        lot = [int(r["N° fiche"]) for _, r in ecarts.iterrows()
-                               if r["Commune déclarée"] == declaree
-                               and r["Commune du point GPS"] == reelle
-                               and pd.notna(r["N° fiche"])]
-                        try:
-                            corriger_soumissions(base_url, token, uid, lot, xpath,
-                                                 codes_communes[reelle])
-                            resultats.append(f"{declaree} -> {reelle} : "
-                                             f"{len(lot)} fiche(s)")
-                        except Exception as e:
-                            echecs.append(f"{declaree} -> {reelle} : {e}")
-                    if resultats:
-                        st.success("Correction envoyée à Kobo - " + " · ".join(resultats))
-                        get_data.clear()
-                        st.info("Cliquez sur « 🔄 Actualiser les données » pour voir "
-                                "le tableau de bord recalculé.")
-                    for e in echecs:
-                        st.error(f"Échec : {e}")
-    elif not collecte_vide and fdf["latitude"].notna().any():
-        st.success("✅ Communes déclarées et points GPS cohérents sur toutes les "
-                   "enquêtes géolocalisées.")
-
     g1, g2 = st.columns(2)
     with g1:
         if "date_soumission" in fdf and fdf["date_soumission"].notna().any():
@@ -944,10 +866,22 @@ with tab2:
         indicateur = st.radio("Couleur des communes", choix_ind,
                               index=2 if collecte_vide else 0)
 
+    # La commune retenue pour la carte est celle du point GPS quand il est disponible :
+    # c'est le lieu réellement enquêté, indépendamment de ce que l'enquêteur a
+    # sélectionné. On retombe sur la commune déclarée pour les fiches sans GPS.
+    index_communes = get_index_communes()
+    cles = []
+    for _, r in fdf.iterrows():
+        cle = commune_du_point(r.get("latitude"), r.get("longitude"), index_communes)
+        if not cle:
+            declaree = str(r.get(C["commune"]) or "").strip()
+            cle = commune_to_key(declaree) if declaree else ""
+        if cle:
+            cles.append(cle)
+
     counts = pd.DataFrame({"key": [], "Enquêtes réalisées": []})
-    if C["commune"] in fdf:
-        cc = fdf[C["commune"]].dropna().map(commune_to_key).value_counts()
-        counts = cc.reset_index()
+    if cles:
+        counts = pd.Series(cles).value_counts().reset_index()
         counts.columns = ["key", "Enquêtes réalisées"]
     all_keys = pd.DataFrame({"key": [f["properties"]["key"] for f in geojson["features"]],
                              "Commune": [f["properties"]["commune"] for f in geojson["features"]]})
@@ -979,33 +913,19 @@ with tab2:
                 fig.update_coloraxes(showscale=False)
             gps = fdf.dropna(subset=["latitude", "longitude"])
             if fond in ("Points GPS", "Les deux") and len(gps):
-                ids_ecarts = set(ecarts["N° fiche"]) if not ecarts.empty else set()
-                coherent = gps[~gps["_id"].isin(ids_ecarts)] if "_id" in gps else gps
-                hover = coherent.get(C["commune"],
-                                     pd.Series([""] * len(coherent), index=coherent.index))
-                fig.add_scattermap(lat=coherent["latitude"], lon=coherent["longitude"],
+                hover = gps.get(C["commune"], pd.Series([""] * len(gps), index=gps.index))
+                fig.add_scattermap(lat=gps["latitude"], lon=gps["longitude"],
                                    mode="markers", marker={"size": 9, "color": "#d62728"},
                                    text=hover, name="Enquêtes",
                                    hovertemplate="%{text}<extra></extra>")
-                if ids_ecarts and "_id" in gps:
-                    douteux = gps[gps["_id"].isin(ids_ecarts)]
-                    if len(douteux):
-                        h = douteux.get(C["commune"],
-                                        pd.Series([""] * len(douteux), index=douteux.index))
-                        fig.add_scattermap(
-                            lat=douteux["latitude"], lon=douteux["longitude"],
-                            mode="markers",
-                            marker={"size": 13, "color": "#ff9800", "opacity": 0.95},
-                            text=[f"⚠ déclaré : {v}" for v in h],
-                            name="Commune douteuse",
-                            hovertemplate="%{text}<extra></extra>")
             fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0}, map_style="carto-positron")
             st.plotly_chart(fig, width="stretch")
         except Exception as e:
             st.error(f"Erreur d'affichage de la carte : {e}")
 
     st.caption("Suivi du plan d'échantillonnage (400 enquêtes réparties au poids "
-               "démographique ANSD 2023)")
+               "démographique ANSD 2023). Les enquêtes sont rattachées à la commune "
+               "de leur point GPS.")
     st.dataframe(
         counts[["Commune", "Population ANSD 2023", "Quota du plan", "Enquêtes réalisées",
                 "Taux de réalisation (%)", "Restant"]].sort_values("Quota du plan",
