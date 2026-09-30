@@ -322,6 +322,137 @@ PROTOCOLES = [
     ("Travailleurs / Bokk Diom / WIEGO", "Approche par les pairs, focus groups, restitution", "Mouhamadou WADE"),
 ]
 
+# ------------------------------------------- Contrôle qualité des communes ----
+# Les enquêteurs saisissent la commune à la main : une erreur de sélection place les
+# enquêtes dans le mauvais quota. Le point GPS, lui, ne se trompe pas. On compare donc
+# la commune déclarée à celle qui contient réellement le point (test d'appartenance au
+# polygone, en Python pur pour ne pas ajouter de dépendance géospatiale).
+
+def _point_dans_anneau(lon, lat, anneau) -> bool:
+    """Lancer de rayon : compte les intersections avec les côtés du polygone."""
+    dedans = False
+    n = len(anneau)
+    j = n - 1
+    for i in range(n):
+        xi, yi = anneau[i][0], anneau[i][1]
+        xj, yj = anneau[j][0], anneau[j][1]
+        if (yi > lat) != (yj > lat):
+            if lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi:
+                dedans = not dedans
+        j = i
+    return dedans
+
+
+def _point_dans_geometrie(lon, lat, geom) -> bool:
+    """Gère Polygon et MultiPolygon, trous compris."""
+    polygones = ([geom["coordinates"]] if geom["type"] == "Polygon"
+                 else geom["coordinates"])
+    for poly in polygones:
+        if not poly:
+            continue
+        if _point_dans_anneau(lon, lat, poly[0]):           # contour extérieur
+            if not any(_point_dans_anneau(lon, lat, trou) for trou in poly[1:]):
+                return True
+    return False
+
+
+def indexer_communes(geojson: dict) -> list:
+    """Prépare (clé, libellé, cadre englobant, géométrie) pour un test rapide."""
+    index = []
+    for f in geojson["features"]:
+        coords = f["geometry"]["coordinates"]
+        plat = []
+        piles = [coords]
+        while piles:
+            c = piles.pop()
+            if c and isinstance(c[0], (int, float)):
+                plat.append(c)
+            else:
+                piles.extend(c)
+        lons = [p[0] for p in plat]
+        lats = [p[1] for p in plat]
+        index.append({"key": f["properties"]["key"],
+                      "commune": f["properties"]["commune"],
+                      "bbox": (min(lons), min(lats), max(lons), max(lats)),
+                      "geom": f["geometry"]})
+    return index
+
+
+def commune_du_point(lat, lon, index) -> str:
+    """Clé de la commune contenant le point, ou '' si hors du département."""
+    if lat is None or lon is None or pd.isna(lat) or pd.isna(lon):
+        return ""
+    for c in index:
+        x0, y0, x1, y1 = c["bbox"]
+        if x0 <= lon <= x1 and y0 <= lat <= y1:          # filtre rapide
+            if _point_dans_geometrie(lon, lat, c["geom"]):
+                return c["key"]
+    return ""
+
+
+def controler_communes(data: pd.DataFrame, index: list, form: dict) -> pd.DataFrame:
+    """Confronte commune déclarée et commune du point GPS, une ligne par écart."""
+    if data.empty or COL["commune"] not in data.columns:
+        return pd.DataFrame()
+    # Afficher le libellé tel qu'il figure dans le formulaire (« Patte d'Oie ») et
+    # non celui du fond de carte (« PATTE D'OIE ») : c'est ce libellé qui permet de
+    # retrouver le code de la modalité au moment de corriger dans Kobo.
+    libelles = {c["key"]: c["commune"] for c in index}
+    for lab in form["choices"].get(form["listname"].get(COL["commune"], ""), {}).values():
+        lab = str(lab).strip()
+        if lab:
+            libelles[commune_to_key(lab)] = lab
+    lignes = []
+    for _, r in data.iterrows():
+        declaree = str(r.get(COL["commune"]) or "").strip()
+        if not declaree:
+            continue
+        cle_gps = commune_du_point(r.get("latitude"), r.get("longitude"), index)
+        if not cle_gps:
+            continue                      # pas de GPS ou point hors département
+        if cle_gps != commune_to_key(declaree):
+            lignes.append({
+                "N° fiche": r.get("_id"),
+                "Date": str(r.get("date_soumission") or ""),
+                "Enquêteur": r.get(COL["enqueteur"], ""),
+                "Commune déclarée": declaree,
+                "Commune du point GPS": libelles.get(cle_gps, cle_gps),
+                "latitude": r.get("latitude"),
+                "longitude": r.get("longitude"),
+            })
+    return pd.DataFrame(lignes)
+
+
+def xpath_du_champ(records: list, nom: str) -> str:
+    """Chemin complet du champ tel que Kobo l'attend (ex. « m0/commune »).
+    On le lit dans les données elles-mêmes plutôt que de le reconstruire : si le
+    questionnaire est réorganisé, la correction reste valable."""
+    for rec in records:
+        for cle in rec:
+            if cle == nom or cle.endswith("/" + nom):
+                return cle
+    return nom
+
+
+def corriger_soumissions(base_url: str, token: str, asset_uid: str,
+                         ids: list, xpath: str, valeur: str) -> dict:
+    """Écrit une nouvelle valeur dans plusieurs soumissions (API bulk de Kobo).
+    Renvoie la réponse de l'API. L'opération est définitive côté Kobo : Kobo
+    conserve l'historique de la soumission, mais la plateforme ne sait pas revenir
+    en arrière toute seule."""
+    url = f"{base_url.rstrip('/')}/api/v2/assets/{asset_uid}/data/bulk/"
+    corps = {"payload": {"submission_ids": [str(i) for i in ids],
+                         "data": {xpath: valeur}}}
+    r = requests.patch(url, json=corps, headers={**kobo_headers(token),
+                                                 "Content-Type": "application/json"},
+                       timeout=120)
+    r.raise_for_status()
+    try:
+        return r.json()
+    except ValueError:
+        return {"statut": r.status_code}
+
+
 # ------------------------------------------------------------- Photos --------
 
 def extraire_photos(records: list, form: dict) -> list:
@@ -543,6 +674,11 @@ def get_geojson():
         return json.load(f)
 
 
+@st.cache_resource
+def get_index_communes():
+    return indexer_communes(get_geojson())
+
+
 @st.cache_data(ttl=300, show_spinner="Téléchargement des données Kobo…")
 def get_data(base_url, token, uid):
     return fetch_submissions(base_url, token, uid)
@@ -677,6 +813,84 @@ with tab1:
          if (C["migratoire"] in fdf and len(fdf)) else 0.0)
     q3.metric("Migrants (cible >= 15 %)", f"{p:.0%}", delta=f"{(p - 0.15) * 100:+.0f} pts")
 
+    # Contrôle qualité : commune déclarée par l'enquêteur vs commune du point GPS
+    ecarts = controler_communes(fdf, get_index_communes(), form)
+    if not ecarts.empty:
+        st.warning(f"⚠️ **{len(ecarts)} enquête(s) dont la commune déclarée ne "
+                   "correspond pas au point GPS.** Le quota de la commune réellement "
+                   "visitée est donc sous-évalué, celui de la commune déclarée "
+                   "sur-évalué.")
+        with st.expander(f"🔎 Voir les {len(ecarts)} écart(s) commune / GPS",
+                         expanded=True):
+            resume = (ecarts.groupby(["Commune déclarée", "Commune du point GPS"])
+                      .size().reset_index(name="Enquêtes")
+                      .sort_values("Enquêtes", ascending=False))
+            st.markdown("**Écarts les plus fréquents**")
+            st.dataframe(resume, width="stretch", hide_index=True)
+            st.markdown("**Détail des fiches concernées**")
+            st.dataframe(ecarts.drop(columns=["latitude", "longitude"]),
+                         width="stretch", hide_index=True)
+            st.download_button(
+                "⬇️ Télécharger la liste à corriger",
+                ecarts.to_csv(index=False).encode("utf-8-sig"),
+                "C40_communes_a_corriger.csv", "text/csv", key="dl_ecarts")
+
+            st.divider()
+            st.markdown("**Corriger dans KoboToolbox**")
+            st.caption("La commune déclarée est remplacée par celle du point GPS, "
+                       "directement dans les soumissions Kobo. Kobo garde l'historique "
+                       "de chaque soumission, mais la plateforme ne peut pas annuler "
+                       "l'opération : vérifiez la liste ci-dessus avant de lancer.")
+
+            codes_communes = {v: k for k, v in
+                              form["choices"].get(
+                                  form["listname"].get(C["commune"], ""), {}).items()}
+            paires = [(r["Commune déclarée"], r["Commune du point GPS"], int(r["Enquêtes"]))
+                      for _, r in resume.iterrows()]
+            libelles_paires = [f"{d} -> {g}  ({n} fiche(s))" for d, g, n in paires]
+            choix = st.multiselect("Corrections à appliquer", libelles_paires,
+                                   default=libelles_paires, key="choix_corrections")
+            selection = [p for p, lib in zip(paires, libelles_paires) if lib in choix]
+            fiches = [int(r["N° fiche"]) for _, r in ecarts.iterrows()
+                      if any(r["Commune déclarée"] == d and r["Commune du point GPS"] == g
+                             for d, g, _ in selection)
+                      and pd.notna(r["N° fiche"])]
+
+            confirme = st.checkbox(
+                f"Je confirme la correction de {len(fiches)} fiche(s) dans KoboToolbox",
+                key="confirme_correction")
+            if st.button("✍️ Appliquer la correction dans Kobo",
+                         disabled=not (confirme and fiches), key="btn_correction"):
+                manquants = [g for _, g, _ in selection if g not in codes_communes]
+                if manquants:
+                    st.error("Commune absente de la liste de choix du formulaire : "
+                             + ", ".join(sorted(set(manquants))))
+                else:
+                    xpath = xpath_du_champ(records, C["commune"])
+                    resultats, echecs = [], []
+                    for declaree, reelle, _ in selection:
+                        lot = [int(r["N° fiche"]) for _, r in ecarts.iterrows()
+                               if r["Commune déclarée"] == declaree
+                               and r["Commune du point GPS"] == reelle
+                               and pd.notna(r["N° fiche"])]
+                        try:
+                            corriger_soumissions(base_url, token, uid, lot, xpath,
+                                                 codes_communes[reelle])
+                            resultats.append(f"{declaree} -> {reelle} : "
+                                             f"{len(lot)} fiche(s)")
+                        except Exception as e:
+                            echecs.append(f"{declaree} -> {reelle} : {e}")
+                    if resultats:
+                        st.success("Correction envoyée à Kobo - " + " · ".join(resultats))
+                        get_data.clear()
+                        st.info("Cliquez sur « 🔄 Actualiser les données » pour voir "
+                                "le tableau de bord recalculé.")
+                    for e in echecs:
+                        st.error(f"Échec : {e}")
+    elif not collecte_vide and fdf["latitude"].notna().any():
+        st.success("✅ Communes déclarées et points GPS cohérents sur toutes les "
+                   "enquêtes géolocalisées.")
+
     g1, g2 = st.columns(2)
     with g1:
         if "date_soumission" in fdf and fdf["date_soumission"].notna().any():
@@ -765,10 +979,26 @@ with tab2:
                 fig.update_coloraxes(showscale=False)
             gps = fdf.dropna(subset=["latitude", "longitude"])
             if fond in ("Points GPS", "Les deux") and len(gps):
-                hover = gps.get(C["commune"], pd.Series([""] * len(gps), index=gps.index))
-                fig.add_scattermap(lat=gps["latitude"], lon=gps["longitude"], mode="markers",
-                                   marker={"size": 9, "color": "#d62728"}, text=hover,
-                                   name="Enquêtes", hovertemplate="%{text}<extra></extra>")
+                ids_ecarts = set(ecarts["N° fiche"]) if not ecarts.empty else set()
+                coherent = gps[~gps["_id"].isin(ids_ecarts)] if "_id" in gps else gps
+                hover = coherent.get(C["commune"],
+                                     pd.Series([""] * len(coherent), index=coherent.index))
+                fig.add_scattermap(lat=coherent["latitude"], lon=coherent["longitude"],
+                                   mode="markers", marker={"size": 9, "color": "#d62728"},
+                                   text=hover, name="Enquêtes",
+                                   hovertemplate="%{text}<extra></extra>")
+                if ids_ecarts and "_id" in gps:
+                    douteux = gps[gps["_id"].isin(ids_ecarts)]
+                    if len(douteux):
+                        h = douteux.get(C["commune"],
+                                        pd.Series([""] * len(douteux), index=douteux.index))
+                        fig.add_scattermap(
+                            lat=douteux["latitude"], lon=douteux["longitude"],
+                            mode="markers",
+                            marker={"size": 13, "color": "#ff9800", "opacity": 0.95},
+                            text=[f"⚠ déclaré : {v}" for v in h],
+                            name="Commune douteuse",
+                            hovertemplate="%{text}<extra></extra>")
             fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0}, map_style="carto-positron")
             st.plotly_chart(fig, width="stretch")
         except Exception as e:
