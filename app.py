@@ -43,6 +43,24 @@ FORM_QUALI = {
     "alias": ["Grille de saisie qualitative (entretiens et focus groups).xlsx"],
     "motif": "qualitative",
 }
+FORM_POINTS = {
+    "titre": "Points de pré-collecte & charretiers",
+    "uid": "amkNFDV4PrTy5VLNuVTQai",
+    "xlsform": "form_points.xlsx",
+    "alias": ["Fiche d'identification  points de pré-collecte  charretiers.xlsx"],
+    "motif": "pr\u00e9-collecte",
+}
+
+# Champs clés de la fiche d'identification des points
+COL_POINTS = {
+    "commune": "commune_point",
+    "enqueteur": "enqueteur",
+    "gps": "gps",
+    "type_fiche": "type_fiche",
+    "type_point": "type_point",
+    "statut": "statut_point",
+    "nom": "nom_point",
+}
 
 
 def trouver_xlsform(dossier: str, config: dict) -> str:
@@ -458,10 +476,13 @@ def corriger_soumissions(base_url: str, token: str, asset_uid: str,
 def extraire_photos(records: list, form: dict) -> list:
     """Liste les photos jointes aux soumissions (pièces jointes Kobo)."""
     photos = []
-    codes_communes = form["choices"].get(form["listname"].get(COL["commune"], ""), {})
+    champ_commune = next((c for c in (COL["commune"], COL_POINTS["commune"])
+                          if c in form["listname"]), COL["commune"])
+    codes_communes = form["choices"].get(form["listname"].get(champ_commune, ""), {})
     for rec in records:
         infos = {k.split("/")[-1]: v for k, v in rec.items()}
-        brut = infos.get(COL["commune"]) or infos.get("commune_lieu") or ""
+        brut = (infos.get(COL["commune"]) or infos.get(COL_POINTS["commune"])
+                or infos.get("commune_lieu") or "")
         commune = codes_communes.get(brut, brut)
         for att in rec.get("_attachments") or []:
             mime = str(att.get("mimetype", ""))
@@ -664,7 +685,8 @@ div[data-testid="stDownloadButton"] button:hover { background-color: #0d3f14 !im
 
 @st.cache_resource
 def get_form(cle):
-    config = FORM_QUANTI if cle == "quanti" else FORM_QUALI
+    config = {"quanti": FORM_QUANTI, "quali": FORM_QUALI,
+              "points": FORM_POINTS}[cle]
     return load_xlsform(trouver_xlsform(APP_DIR, config))
 
 
@@ -692,6 +714,7 @@ def get_image(url, token):
 try:
     form = get_form("quanti")
     form_q = get_form("quali")
+    form_p = get_form("points")
     geojson = get_geojson()
 except FileNotFoundError as e:
     st.error(f"Fichier manquant : {e}")
@@ -710,6 +733,7 @@ base_url = st.secrets.get("kobo", {}).get("base_url", DEFAULT_URL)
 token = st.secrets.get("kobo", {}).get("token", "")
 uid = st.secrets.get("kobo", {}).get("asset_uid", FORM_QUANTI["uid"])
 uid_q = st.secrets.get("kobo", {}).get("asset_uid_quali", FORM_QUALI["uid"])
+uid_p = st.secrets.get("kobo", {}).get("asset_uid_points", FORM_POINTS["uid"])
 
 with st.sidebar.expander("⚙️ Connexion Kobo", expanded=not token):
     base_url = st.text_input("Serveur", base_url)
@@ -717,6 +741,7 @@ with st.sidebar.expander("⚙️ Connexion Kobo", expanded=not token):
                           help="Compte Kobo → Account Settings → Security → API Key")
     st.caption(f"Enquête individuelle : `{uid}`")
     st.caption(f"Qualitatif : `{uid_q}`")
+    st.caption(f"Points de pré-collecte : `{uid_p}`")
 
 if st.sidebar.button("🔄 Actualiser les données"):
     get_data.clear()
@@ -738,8 +763,14 @@ try:
 except Exception:
     records_q = []
 
+try:
+    records_p = get_data(base_url, token, uid_p)
+except Exception:
+    records_p = []
+
 df = to_dataframe(records, form)
 dfq = to_dataframe(records_q, form_q)
+dfp = to_dataframe(records_p, form_p)
 
 # Avant la collecte : tableau de bord complet avec des compteurs à zéro
 collecte_vide = df.empty
@@ -780,9 +811,10 @@ st.sidebar.metric("Enquêtes affichées", f"{len(fdf)} / {len(df)}")
 
 # ----------------------------------------------------------------- Corps ----
 
-tab1, tab2, tab3, tab4, tab6, tab7, tab5 = st.tabs(
-    ["📊 Suivi des enquêtes", "🗺️ Carte", "📈 Analyse thématique",
-     "🗣️ Qualitatif", "📷 Photos", "🤝 Parties prenantes", "📥 Données & export"])
+tab1, tab2, tab9, tab3, tab4, tab6, tab7, tab5 = st.tabs(
+    ["📊 Suivi des enquêtes", "🗺️ Carte", "📍 Points de pré-collecte",
+     "📈 Analyse thématique", "🗣️ Qualitatif", "📷 Photos",
+     "🤝 Parties prenantes", "📥 Données & export"])
 
 # ============================================== 1. SUIVI DES ENQUÊTES ========
 with tab1:
@@ -1106,7 +1138,8 @@ with tab4:
 
 # =============================================================== 6. PHOTOS ===
 with tab6:
-    photos = extraire_photos(records, form) + extraire_photos(records_q, form_q)
+    photos = (extraire_photos(records, form) + extraire_photos(records_q, form_q)
+              + extraire_photos(records_p, form_p))
     if not photos:
         st.info("Aucune photo pour le moment. Les clichés pris par les enquêteurs "
                 "apparaîtront ici automatiquement.")
@@ -1187,12 +1220,93 @@ with tab7:
     st.caption("Source : Cartographie des parties prenantes - Mission C40 Cities · "
                "Ville de Dakar")
 
+# ========================================= 9. POINTS DE PRÉ-COLLECTE =========
+with tab9:
+    CP = COL_POINTS
+    if dfp.empty:
+        st.info("Aucune fiche d'identification saisie pour le moment. Les points de "
+                "pré-collecte et les charretiers recensés apparaîtront ici "
+                f"automatiquement (formulaire : {FORM_POINTS['titre']}).")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Fiches saisies", len(dfp))
+        if CP["type_fiche"] in dfp:
+            vc = dfp[CP["type_fiche"]].astype(str).value_counts()
+            points = int(sum(v for k, v in vc.items() if "oint" in k))
+            c2.metric("Points de pré-collecte", points)
+            c3.metric("Charretiers", int(sum(v for k, v in vc.items()
+                                             if "harretier" in k)))
+        if CP["commune"] in dfp:
+            c4.metric("Communes couvertes",
+                      f"{dfp[CP['commune']].dropna().nunique()} / 19")
+
+        # Effectifs cumulés déclarés sur les points
+        effectifs = [("nb_charretiers", "Charretiers fréquentant les points"),
+                     ("nb_tricyclistes", "Tricyclistes"),
+                     ("nb_recuperateurs", "Récupérateurs / trieurs")]
+        dispo = [(c, lib) for c, lib in effectifs if c in dfp]
+        if dispo:
+            st.markdown("**Acteurs recensés sur les points** (somme des estimations)")
+            cols = st.columns(len(dispo))
+            for col, (c, lib) in zip(cols, dispo):
+                col.metric(lib, int(pd.to_numeric(dfp[c], errors="coerce").sum()))
+
+        # Carte des points
+        gps_p = dfp.dropna(subset=["latitude", "longitude"])
+        if len(gps_p):
+            st.markdown("**Localisation des points recensés**")
+            couleur = CP["type_point"] if CP["type_point"] in gps_p else None
+            etiquette = gps_p.get(CP["nom"],
+                                  pd.Series([""] * len(gps_p), index=gps_p.index))
+            fig = px.scatter_map(
+                gps_p.assign(**{"Point": etiquette.fillna("")}),
+                lat="latitude", lon="longitude",
+                color=couleur, hover_name="Point",
+                center={"lat": 14.716, "lon": -17.45}, zoom=10.6, height=600)
+            fig.update_traces(marker={"size": 12})
+            fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0},
+                              map_style="carto-positron",
+                              legend={"title": "Type de point"})
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.caption("Aucune fiche géolocalisée pour le moment.")
+
+        g1, g2 = st.columns(2)
+        with g1:
+            if CP["type_point"] in dfp and dfp[CP["type_point"]].notna().any():
+                d = dfp[CP["type_point"]].value_counts().reset_index()
+                d.columns = ["Type de point", "Nombre"]
+                fig = px.bar(d.sort_values("Nombre"), x="Nombre", y="Type de point",
+                             orientation="h", title="Répartition par type de point",
+                             text_auto=True)
+                fig.update_layout(height=360, yaxis_title="")
+                st.plotly_chart(fig, width="stretch", key="pts_type")
+        with g2:
+            if CP["commune"] in dfp and dfp[CP["commune"]].notna().any():
+                d = dfp[CP["commune"]].value_counts().reset_index()
+                d.columns = ["Commune", "Points"]
+                fig = px.bar(d.sort_values("Points"), x="Points", y="Commune",
+                             orientation="h", title="Points par commune", text_auto=True)
+                fig.update_layout(height=360, yaxis_title="")
+                st.plotly_chart(fig, width="stretch", key="pts_commune")
+
+        st.divider()
+        libelles_p = {form_p["groups"][g]: g for g in form_p["ordre_groupes"]}
+        if libelles_p:
+            gp = st.selectbox("Section de la fiche", list(libelles_p), key="sec_points")
+            afficher_questions(dfp, form_p,
+                               questions_de(form_p, dfp, libelles_p[gp]), "points")
+
 # ==================================================== 5. DONNÉES & EXPORT ====
 with tab5:
-    jeu = st.radio("Jeu de données", ["Enquête individuelle", "Entretiens & focus groups"],
-                   horizontal=True)
-    source, formulaire, nom = (fdf, form, "enquete_individuelle") if jeu == "Enquête individuelle" \
-        else (dfq, form_q, "qualitatif")
+    jeu = st.radio("Jeu de données",
+                   ["Enquête individuelle", "Entretiens & focus groups",
+                    "Points de pré-collecte"], horizontal=True)
+    source, formulaire, nom = {
+        "Enquête individuelle": (fdf, form, "enquete_individuelle"),
+        "Entretiens & focus groups": (dfq, form_q, "qualitatif"),
+        "Points de pré-collecte": (dfp, form_p, "points_precollecte"),
+    }[jeu]
 
     if source.empty:
         st.info("Aucune donnée à afficher.")
