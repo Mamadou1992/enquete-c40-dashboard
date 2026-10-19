@@ -531,44 +531,6 @@ PLAN_QUOTAS = {  # clé GeoJSON -> (population ANSD 2023, quota d'enquêtes)
     "NGOR": (17706, 6),
     "GOREE": (1691, 2),
 }
-# ------------------------------------------------ Plan qualitatif prévu ------
-# Nombre de séances / entretiens attendus pour chaque item.
-# Modifiez ces valeurs si le plan de collecte qualitative évolue.
-# Source : Rapport méthodologique SGP x C40 (sources primaires)
-#   - 6 focus groups thématiques de 8 à 10 participants
-#   - ~30 entretiens semi-directifs approfondis par profil (5 profils -> 6 chacun)
-#   - ~15 entretiens institutionnels (4 types de structures -> 4 chacun, soit 16)
-PLAN_QUALI = {
-    "groupe_fg": 1,        # 6 focus groups au total (1 séance par groupe FG1 à FG6)
-    "profil_ind": 6,       # 30 entretiens individuels répartis sur 5 profils
-    "structure_inst": 4,   # ~15 entretiens institutionnels sur 4 types de structures
-}
-# Fourchette de participants attendue par focus group (rapport méthodologique)
-FG_PARTICIPANTS = (8, 10)
-PLAN_QUALI_LIBELLES = {
-    "groupe_fg": "Focus groups",
-    "profil_ind": "Entretiens individuels (par profil)",
-    "structure_inst": "Entretiens institutionnels (par structure)",
-}
-
-
-def suivi_plan_quali(dfq: pd.DataFrame, form_q: dict, champ: str) -> pd.DataFrame:
-    """Compare le réalisé à la cible pour un champ du plan qualitatif."""
-    cibles = form_q["choices"].get(form_q["listname"].get(champ, ""), {})
-    attendu = PLAN_QUALI.get(champ, 1)
-    realise = (dfq[champ].astype(str).value_counts()
-               if (champ in dfq.columns and not dfq.empty) else pd.Series(dtype=int))
-    lignes = []
-    for libelle in cibles.values():
-        lib = str(libelle).strip()
-        fait = int(realise.get(lib, 0))
-        lignes.append({"Item": lib, "Réalisé": fait, "Prévu": attendu,
-                       "Reste": max(attendu - fait, 0),
-                       "Statut": "✅ Fait" if fait >= attendu else
-                                 ("🟡 En cours" if fait else "⬜ À faire")})
-    return pd.DataFrame(lignes)
-
-
 # Quotas transversaux (part minimale attendue) et par fonction
 PLAN_TRANSVERSAL = {"femmes": 0.40, "jeunes": 0.25, "migrants": 0.15}
 # Échantillon stratifié par fonction : 240 charretiers, 80 récupérateurs,
@@ -1043,45 +1005,9 @@ with tab3:
     afficher_questions(fdf, form, questions_de(form, fdf, libelles[gsel]), "quanti")
 
 # ========================================================== 4. QUALITATIF ====
-def suivi_plan_qualitatif(donnees):
-    """Ce qui est réalisé et ce qui reste, pour les focus groups, les profils
-    d'entretiens individuels et les structures institutionnelles."""
-    st.subheader("Suivi du plan qualitatif")
-    total_prevu = total_fait = 0
-    tables = {}
-    for champ in ("groupe_fg", "profil_ind", "structure_inst"):
-        t = suivi_plan_quali(donnees, form_q, champ)
-        if not t.empty:
-            tables[champ] = t
-            total_prevu += int(t["Prévu"].sum())
-            total_fait += int(t["Réalisé"].sum())
-    if not tables:
-        return
-    avance = total_fait / total_prevu if total_prevu else 0
-    st.progress(min(avance, 1.0),
-                text=f"Avancement global : {total_fait} / {total_prevu} "
-                     f"séances et entretiens ({avance:.0%})")
-    cols = st.columns(len(tables))
-    for col, (champ, t) in zip(cols, tables.items()):
-        with col:
-            fait = int((t["Réalisé"] >= t["Prévu"]).sum())
-            st.markdown(f"**{PLAN_QUALI_LIBELLES[champ]}** - {fait}/{len(t)} complétés")
-            st.dataframe(t[["Item", "Réalisé", "Prévu", "Statut"]], width="stretch",
-                         hide_index=True, height=min(38 * len(t) + 40, 300))
-    manque = []
-    for champ, t in tables.items():
-        manque += list(t.loc[t["Réalisé"] == 0, "Item"])
-    if manque:
-        st.warning("**Pas encore réalisé :** " + " · ".join(manque))
-    else:
-        st.success("Toutes les séances et tous les entretiens prévus sont couverts.")
-
-
 with tab4:
     if dfq.empty:
-        st.info("Aucun entretien ni focus group saisi pour le moment - le plan ci-dessous "
-                "se cochera au fur et à mesure de la collecte qualitative.")
-        suivi_plan_qualitatif(dfq)
+        st.info("Aucun entretien ni focus group saisi pour le moment.")
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Fiches saisies", len(dfq))
@@ -1114,14 +1040,10 @@ with tab4:
         if cols_part:
             tot = {form_q["label"].get(c, c): int(pd.to_numeric(dfq[c], errors="coerce").sum())
                    for c in cols_part}
-            st.markdown("**Participants aux focus groups** "
-                        f"(cible : {FG_PARTICIPANTS[0]} à {FG_PARTICIPANTS[1]} par séance)")
+            st.markdown("**Participants aux focus groups**")
             cs = st.columns(len(tot))
             for col, (k, v) in zip(cs, tot.items()):
                 col.metric(k.replace("dont ", "Dont "), v)
-
-        st.divider()
-        suivi_plan_qualitatif(dfq)
 
         st.divider()
         libelles_q = {form_q["groups"][g]: g for g in form_q["ordre_groupes"]}
